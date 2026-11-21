@@ -1,0 +1,45 @@
+# One open request (a fix, a feature, a picture, a setting). Every ask becomes one of these, so nothing lives
+# only in a chat. Add the area label (ui, animation, gameplay, model, sound, vfx, store-art, tools, qa, design)
+# and needs-owner when it waits on the owner. To take it: add the claim label and comment who is on it.
+# The pull request that finishes it says "Closes" plus the issue number.
+name: Task
+description: An open request with what was asked, where it stands and how to tell it is done
+body:
+  - type: textarea
+    id: asked
+    attributes:
+      label: What was asked
+      description: The owner's words (quote them, with the date) or the spec section it comes from. Screenshots are welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Pick the one that owns most of the work, and add the same label to the issue.
+      options: [ui, animation, gameplay, model, sound, vfx, store-art, tools, qa, design]
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details and done when
+      description: What to change, the real game values or files involved, and how to check it is done.
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: Where it stands
+      description: What is already done (pull requests, files), what it waits on and the next step.
+  - type: input
+    id: credit
+    attributes:
+      label: Credit (only when this came from a player's feedback)
+      description: "A report key only. Never a username, display name or user id if this repo is public."
+  - type: textarea
+    id: files
+    attributes:
+      label: Folders and files
+      description: One per line.
+      render: text

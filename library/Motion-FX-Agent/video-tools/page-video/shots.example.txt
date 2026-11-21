@@ -1,0 +1,10 @@
+# Shot list for cut.sh. One shot per line: take  start  length  [text|size]
+# take = file name in RAW_DIR without .mp4. start = seconds into the raw take. length = seconds.
+# The game page video has no on-screen text, so the text column is left off here.
+# Put the best moment first: the first 3 seconds decide whether a visitor keeps watching.
+hook   2  2.0
+action 2  4.0
+reward 2  4.0
+build  2  5.0
+wide   2  3.0
+close  2  2.0

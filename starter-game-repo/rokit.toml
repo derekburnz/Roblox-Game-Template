@@ -1,0 +1,13 @@
+# Rokit pins the toolchain so every PC and every CI run uses the same versions.
+# Install Rokit once (docs/setup-guide.md step 3), then run `rokit install` in this folder.
+# Bump a tool with `rokit add <owner>/<repo>@<version>`. After a bump run `rokit install`,
+# and `rojo plugin install` when Rojo moved.
+# StyLua is held at 2.1.0 on purpose: a newer formatter reformats existing code, which turns a
+# version bump into a huge diff. Bump it only in its own pull request.
+
+[tools]
+rojo = "rojo-rbx/rojo@7.7.1"
+wally = "UpliftGames/wally@0.3.2"
+selene = "Kampfkarren/selene@0.32.0"
+stylua = "JohnnyMorganz/StyLua@2.1.0"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.70.1"

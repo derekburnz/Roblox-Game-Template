@@ -1,0 +1,58 @@
+# Read or change the live switches (src/shared/LiveFlags.luau), so a feature can be turned on or off in every
+# running server within about a minute, with no publish and no restart.
+# Start it from the Actions tab (flags > Run workflow) or from a thread. Run one at a time and read the job log
+# to confirm: "name = true (ON in every server)".
+# Needs: secret ROBLOX_PUBLISH_KEY with universe-datastores.objects:read, :create and :update,
+# variable ROBLOX_UNIVERSE_ID (docs/setup-guide.md step 8).
+name: flags
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "show | set | clear (clear puts the switch back at its default)"
+        type: choice
+        options: [show, set, clear]
+        default: show
+      key:
+        description: "Which switch (set and clear): a name in LiveFlags.KEYS"
+        type: string
+        default: ""
+      value:
+        description: "set only: true or false"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Runs queue one after another, so two flips never race.
+concurrency:
+  group: flags
+  cancel-in-progress: false
+
+env:
+  GAME_DIR: games/GAME_SLUG
+  UNIVERSE_ID: ${{ vars.ROBLOX_UNIVERSE_ID }}
+
+jobs:
+  flags:
+    name: Live switches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_PUBLISH_KEY }}
+      ACTION: ${{ inputs.action }}
+      KEY: ${{ inputs.key }}
+      VALUE: ${{ inputs.value }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read or change the switches
+        working-directory: ${{ env.GAME_DIR }}
+        run: |
+          case "$ACTION" in
+          show) bash tools/opencloud/flags.sh show ;;
+          set) bash tools/opencloud/flags.sh set "$KEY" "$VALUE" ;;
+          clear) bash tools/opencloud/flags.sh clear "$KEY" ;;
+          esac

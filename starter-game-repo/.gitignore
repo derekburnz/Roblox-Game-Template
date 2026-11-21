@@ -1,0 +1,32 @@
+# Rojo, Wally and luau-lsp outputs
+sourcemap.json
+Packages/
+ServerPackages/
+globalTypes*.d.luau
+.types-version
+roblox.toml
+roblox.yml
+
+# Roblox place files and lock files (dev copies live in Studio, not Git)
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Blender backups and Python caches
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
+
+# Secrets and local settings
+.env
+.env.*
+.claude/settings.local.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Node tooling, if a test runner is added later
+node_modules/

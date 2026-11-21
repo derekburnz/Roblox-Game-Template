@@ -1,0 +1,33 @@
+name: Problem with the template
+description: Something in this starter is wrong, unclear or missing
+title: "Template: "
+labels: [template]
+body:
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where is the problem
+      options:
+        - README or the setup steps
+        - library/Setup (rules, roster, instructions)
+        - An agent's starting file
+        - A playbook or a video tool
+        - starter-game-repo (rules, skills, workflows, scripts)
+    validations:
+      required: true
+  - type: input
+    id: file
+    attributes:
+      label: File
+      description: The path, if you know it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what you expected
+      description: Do not paste keys, passwords, player names or private numbers.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix (optional)

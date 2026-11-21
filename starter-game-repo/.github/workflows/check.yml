@@ -1,0 +1,50 @@
+# The check gate on every pull request and on every push to main.
+# On a pull request GitHub checks out the PR merged with the newest main, so the gate tests what main would
+# become, not the branch alone.
+#
+# Required check: main's ruleset (docs/setup-guide.md step 9) requires the job named below. Never rename the
+# job and never add `paths` filters to the pull_request trigger: a required check that does not report leaves
+# auto-merge waiting forever. To skip work on some pull requests, skip steps inside the job instead.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, auto_merge_enabled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'push' && 'check-main' || format('check-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GAME_DIR: games/GAME_SLUG
+
+jobs:
+  gate:
+    name: Rojo sourcemap, luau-lsp, Selene, StyLua
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # The installer and `rokit install` look releases up through the GitHub API. With the job's own token the
+      # rate limit is per repo, far above the unauthenticated limit shared by a runner IP.
+      - name: Install Rokit
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/rojo-rbx/rokit/main/scripts/install.sh | bash
+          echo "$HOME/.rokit/bin" >> "$GITHUB_PATH"
+          "$HOME/.rokit/bin/rokit" authenticate github --token "$GITHUB_PAT" --skip-verify
+
+      - name: Install the pinned toolchain (rokit.toml)
+        run: rokit install --no-trust-check
+
+      - name: Run the check gate
+        working-directory: ${{ env.GAME_DIR }}
+        run: bash ./check.sh

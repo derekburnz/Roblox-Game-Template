@@ -1,0 +1,40 @@
+{
+  "headline": [
+    "The trend's",
+    "opener..."
+  ],
+  "voice": "af_bella",
+  "speed": 0.95,
+  "music": "",
+  "hit": "",
+  "end_seconds": 2,
+  "beats": [
+    {
+      "line": "First line: a specific object",
+      "say": "The opener, then a first line with a specific object or number.",
+      "clip": "RAW/shot-1.mp4",
+      "start": 0
+    },
+    {
+      "line": "What I did next",
+      "say": "So I did the thing the game is about...",
+      "clip": "RAW/shot-2.mp4",
+      "start": 0
+    },
+    {
+      "line": "and then it happened",
+      "say": "and then it happened.",
+      "clip": "RAW/shot-3.mp4",
+      "start": 0,
+      "hold": 0.8
+    },
+    {
+      "line": "The payoff, with its real odds",
+      "say": "",
+      "clip": "RAW/reveal.mp4",
+      "start": 0,
+      "min": 3.0,
+      "hit": true
+    }
+  ]
+}

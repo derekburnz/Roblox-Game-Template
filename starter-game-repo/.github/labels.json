@@ -1,0 +1,18 @@
+{
+  "labels": [
+    { "name": "ui", "color": "1d76db", "description": "Screens, HUD, menus, tutorial text (src/client/UI)" },
+    { "name": "animation", "color": "5319e7", "description": "Poses, character motion, cutscenes, the trailer (src/client/Effects, assets anim)" },
+    { "name": "gameplay", "color": "0e8a16", "description": "Server rules, Config, remotes, saves (src/server, src/shared)" },
+    { "name": "model", "color": "bfd4f2", "description": "3D models, areas and world layout (assets blender)" },
+    { "name": "sound", "color": "fbca04", "description": "Sounds, music, audio uploads (assets audio, src/client/Audio)" },
+    { "name": "vfx", "color": "f9d0c4", "description": "Effects and their budgets (src/client/Effects, docs/vfx)" },
+    { "name": "store-art", "color": "e99695", "description": "Store page pictures, icon, thumbnails, page video" },
+    { "name": "tools", "color": "c2e0c6", "description": "CI, publishing, Open Cloud, Roblox settings, the repo itself (.github, tools/opencloud)" },
+    { "name": "qa", "color": "d4c5f9", "description": "Test plans and playtest walk-throughs (docs/playtests)" },
+    { "name": "design", "color": "0052cc", "description": "Specs and the design document (docs/design)" },
+    { "name": "needs-owner", "color": "d93f0b", "description": "Waits on the owner: an OK, their PC or a Roblox account step" },
+    { "name": "claim", "color": "fef2c0", "description": "Someone is working on this; the comment says who" },
+    { "name": "on-hold", "color": "bfbfbf", "description": "Parked by the owner; not being worked and never auto-merged" },
+    { "name": "automerge", "color": "0e8a16", "description": "Fallback when GitHub refuses native auto-merge: merge by hand once checks pass" }
+  ]
+}

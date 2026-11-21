@@ -1,0 +1,31 @@
+# Restart every running server onto the newest published version, without publishing.
+# A restart disconnects every player, so start this only when the owner says so in their own words.
+# Needs: secret ROBLOX_PUBLISH_KEY with universe Write, variable ROBLOX_UNIVERSE_ID.
+name: restart-servers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  GAME_DIR: games/GAME_SLUG
+  UNIVERSE_ID: ${{ vars.ROBLOX_UNIVERSE_ID }}
+
+jobs:
+  restart:
+    name: Restart servers for updates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_PUBLISH_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Restart
+        working-directory: ${{ env.GAME_DIR }}
+        run: bash tools/opencloud/restart-servers.sh

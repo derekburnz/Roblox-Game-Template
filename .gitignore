@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Roblox and Rojo
+*.rbxl.lock
+*.rbxlx.lock
+sourcemap.json
+
+# Blender backups
+*.blend1
+*.blend2
+
+# Secrets and local settings
+.env
+.env.*
+
+# The starter's skills ship in starter-game-repo/dot-claude/. A stray .claude copy there is never committed.
+starter-game-repo/.claude/

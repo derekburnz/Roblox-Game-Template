@@ -1,0 +1,35 @@
+# Claim board. Open one before work that takes more than one pull request or touches files several threads
+# (or two Claude projects) share, such as shared modules in src/shared/ once the game creates them (a Config or Remotes module), the save service
+# and the design document. Close it when its last pull request merges. A one-PR change inside your own
+# folders needs no claim.
+name: Claim work
+description: Say which feature and files you are working on, so other threads and projects leave them alone
+title: "Claim: "
+labels: [claim]
+body:
+  - type: input
+    id: who
+    attributes:
+      label: Who is claiming
+      description: The project (if two share this repo) and the thread, for example "main project, Gameplay-Engineer".
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you are building or fixing
+      description: One feature or fix. Link the spec or design section if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Folders and files you will touch
+      description: One per line.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: until
+    attributes:
+      label: Expected done (optional)

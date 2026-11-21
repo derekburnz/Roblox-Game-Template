@@ -1,0 +1,101 @@
+# Publish the game to Roblox from GitHub, with no Studio window.
+#
+# By hand: Actions > publish > Run workflow (or a thread dispatches it). Published goes live for new servers;
+# Saved only adds a version to the place history.
+# Automatic: when the repo variable AUTO_PUBLISH is "true", the tip of main is published after every check
+# run on main that passes. So every merge ships, and only work that is ready to ship gets merged.
+#
+# A publish reaches NEW servers only. Running servers keep their version until they empty or are restarted.
+# Restarting disconnects players, so it happens only when the owner says so: tick restart_servers on a hand
+# run, or run restart-servers.yml. The repo variable AUTO_RESTART ("true") makes every automatic publish
+# restart the servers too; leave it unset unless the owner asks for that.
+#
+# Needs: secret ROBLOX_PUBLISH_KEY, variables ROBLOX_UNIVERSE_ID and ROBLOX_PLACE_ID (docs/setup-guide.md step 8).
+# This is a minimal outline. Worth adding once the game has saves: an engine smoke test before going live
+# (Open Cloud Luau Execution) and an in-game countdown before a restart.
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: "Published goes live for players; Saved only adds a version to the place history"
+        type: choice
+        options: [Published, Saved]
+        default: Published
+      restart_servers:
+        description: "Also move running servers onto it. Only on the owner's say: it disconnects players"
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: [check]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One publish at a time; a waiting run is never cancelled by a newer one.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  GAME_DIR: games/GAME_SLUG
+  UNIVERSE_ID: ${{ vars.ROBLOX_UNIVERSE_ID }}
+  PLACE_ID: ${{ vars.ROBLOX_PLACE_ID }}
+
+jobs:
+  publish:
+    name: Build with Rojo and upload
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.AUTO_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_PUBLISH_KEY }}
+    steps:
+      # An automatic run checks out the tip of main, never the older commit that triggered it, so a burst of
+      # merges still ends with the newest main live.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Check the key and ids are set
+        run: |
+          if [ -z "$ROBLOX_PUBLISH_KEY" ]; then
+            echo "::error::The repo secret ROBLOX_PUBLISH_KEY is missing. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+          if [ -z "$UNIVERSE_ID" ] || [ -z "$PLACE_ID" ]; then
+            echo "::error::Set the repo variables ROBLOX_UNIVERSE_ID and ROBLOX_PLACE_ID. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+
+      - name: Install Rokit
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/rojo-rbx/rokit/main/scripts/install.sh | bash
+          echo "$HOME/.rokit/bin" >> "$GITHUB_PATH"
+          "$HOME/.rokit/bin/rokit" authenticate github --token "$GITHUB_PAT" --skip-verify
+
+      - name: Install the pinned toolchain (rokit.toml)
+        run: rokit install --no-trust-check
+
+      - name: Build the place
+        working-directory: ${{ env.GAME_DIR }}
+        run: rojo build default.project.json -o build.rbxl
+
+      - name: Upload (Saved or Published)
+        working-directory: ${{ env.GAME_DIR }}
+        run: bash tools/opencloud/publish.sh "${{ github.event_name == 'workflow_dispatch' && inputs.version_type || 'Published' }}" build.rbxl
+
+      - name: Restart running servers (hand run with restart_servers, or AUTO_RESTART)
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.version_type == 'Published' && inputs.restart_servers) ||
+          (github.event_name != 'workflow_dispatch' && vars.AUTO_RESTART == 'true')
+        working-directory: ${{ env.GAME_DIR }}
+        run: bash tools/opencloud/restart-servers.sh
