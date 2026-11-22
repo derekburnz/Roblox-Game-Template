@@ -1,7 +1,7 @@
 --!strict
 -- Main: loads every Service, runs Init on all of them, then Start on all of them. Init wires dependencies,
 -- Start connects events and begins loops, so services can find each other in Init without ordering bugs.
-local servicesFolder = script.Parent:WaitForChild("Services")
+local servicesFolder = (script.Parent :: Instance):WaitForChild("Services")
 local services: { [string]: any } = {}
 
 for _, module in servicesFolder:GetChildren() do

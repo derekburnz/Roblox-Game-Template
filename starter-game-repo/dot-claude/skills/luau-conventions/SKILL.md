@@ -40,6 +40,7 @@ Order: strict directive, one-line purpose comment, `game:GetService` calls, shar
 - Remote names are verbs from the client's point of view (`RequestCollect`) or past-tense facts from the server (`ItemCollected`).
 
 ## 4. Service template (server)
+The starter repo already ships the house versions of the pieces below: `src/shared/Remotes.luau` (the list), `src/server/Services/NetService.luau` (creates the remotes; `NetService.on` adds the rate limit and pcall), `src/shared/Guard.luau` and `src/server/Util/RateLimiter.luau`. Use them. This template shows what a handler does by hand, so the checks are clear.
 ```lua
 --!strict
 -- PickupService: spawns pickups in the world, validates collect attempts, grants them to profiles.
@@ -51,23 +52,24 @@ local Guard = require(Shared:WaitForChild("Guard"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Types = require(Shared:WaitForChild("Types"))
 
-local RateLimit = require(script.Parent.Parent:WaitForChild("Util"):WaitForChild("RateLimit"))
+local RateLimiter = require(script.Parent.Parent:WaitForChild("Util"):WaitForChild("RateLimiter"))
 
 local PickupService = {}
 
 local DataService -- set in Init
 local active: { [string]: Types.Pickup } = {}
-local collectLimiter = RateLimit.new(Config.Pickups.CollectRemotesPerSecond)
+local collectLimiter = RateLimiter.new(Config.Pickups.CollectRemotesPerSecond, 1)
 
 local function tryCollect(player: Player, pickupId: unknown)
 	-- Drop floods before doing any work.
 	if not collectLimiter:allow(player) then
 		return
 	end
-	if not Guard.isString(pickupId, 40) then
+	local id = Guard.id(pickupId)
+	if id == nil then
 		return
 	end
-	local pickup = active[pickupId :: string]
+	local pickup = active[id]
 	if not pickup then
 		return
 	end
@@ -78,9 +80,9 @@ local function tryCollect(player: Player, pickupId: unknown)
 		return
 	end
 	-- Remove before granting, so two racing requests cannot both win.
-	active[pickupId :: string] = nil
+	active[id] = nil
 	DataService.AddItem(player, pickup.KindId)
-	Remotes.get("ItemCollected"):FireClient(player, pickupId, pickup.KindId)
+	Remotes.get("ItemCollected"):FireClient(player, id, pickup.KindId)
 end
 
 function PickupService.Init(services: { [string]: any })
@@ -98,6 +100,7 @@ return PickupService
 `src/server/Main.server.luau` and `src/client/Main.client.luau` in the starter repo load every module in `Services/` or `Controllers/`, run `Init` on all and then `Start` on all. Add a service by adding a file; Main needs no edit.
 
 ## 6. Remotes: one shared list, typed
+The shipped `src/shared/Remotes.luau` is a plain list, with `NetService` creating the remotes on the server. The typed version below is an option when the list grows.
 `src/shared/Remotes.luau` is the only place RemoteEvents are created. The server creates the folder; the client waits for it.
 ```lua
 --!strict

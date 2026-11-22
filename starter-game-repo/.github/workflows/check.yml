@@ -1,8 +1,8 @@
-# The check gate on every pull request and on every push to main.
+# The check gate on every pull request and on every push to main: the Rokit tools (gate) and the Node tests (tests).
 # On a pull request GitHub checks out the PR merged with the newest main, so the gate tests what main would
 # become, not the branch alone.
 #
-# Required check: main's ruleset (docs/setup-guide.md step 9) requires the job named below. Never rename the
+# Required checks: main's ruleset (docs/setup-guide.md step 9) requires both jobs below by name. Never rename the
 # job and never add `paths` filters to the pull_request trigger: a required check that does not report leaves
 # auto-merge waiting forever. To skip work on some pull requests, skip steps inside the job instead.
 name: check
@@ -48,3 +48,45 @@ jobs:
       - name: Run the check gate
         working-directory: ${{ env.GAME_DIR }}
         run: bash ./check.sh
+
+  tests:
+    # Required too (docs/setup-guide.md step 9). Never rename it without changing the ruleset with it.
+    name: Unit tests, strict types, UI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ env.GAME_DIR }}/tools/cloudcheck
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.GAME_DIR }}/tools/cloudcheck/package-lock.json
+
+      - run: npm ci
+
+      - name: Strict type check of src and tests
+        run: node analyze.mjs --tests
+
+      - name: Unit tests (tests/specs)
+        run: node run-tests.mjs
+
+      - name: UI gate on desktop, laptop and phone
+        run: node uigate.mjs --out "$RUNNER_TEMP/uigate"
+
+      - name: UI gate on tablets (iPad mini, iPad, iPad Pro, Android, Fire)
+        run: node uigate.mjs --tablets --out "$RUNNER_TEMP/uigate-tablets"
+
+      - name: Keep the UI gate pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uigate-report
+          path: |
+            ${{ runner.temp }}/uigate
+            ${{ runner.temp }}/uigate-tablets
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,116 @@
+# Upload pictures or sounds from the repo to Roblox and print their rbxassetids (Open Cloud Assets API), so threads
+# need no Studio Asset Manager. Start it from the Actions tab (upload-asset > Run workflow) or from a thread. One run
+# takes one file or a batch (paths separated by spaces, commas or new lines), and the files can come from an
+# unmerged branch. The job log and the run summary show each id. Every upload makes a new asset, so upload a file
+# once and commit its id.
+#
+# Who owns the upload: the group in the repo variable ROBLOX_GROUP_ID when it is set (use this when a group owns
+# the game), otherwise the user in ROBLOX_OWNER_USER_ID. The key is the secret ROBLOX_GROUP_KEY when it is set,
+# otherwise ROBLOX_PUBLISH_KEY; it needs asset:read and asset:write and must be created by that owner
+# (docs/setup-guide.md step 8).
+name: upload-asset
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "Files in the repo, separated by spaces or commas: pictures (.png .jpg .bmp .tga) or sounds (.mp3 .ogg .wav .flac)"
+        required: true
+      type:
+        description: "Image (ImageLabel.Image, textures), Decal (parts via the Toolbox) or Audio (sounds)"
+        type: choice
+        options: [Image, Decal, Audio]
+        default: Image
+      branch:
+        description: "Branch that holds the files (empty: the branch this run starts on)"
+        required: false
+        default: ""
+      name:
+        description: "Name on Roblox, for a single file (empty, or several files: each file's name without extension)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upload-asset
+  cancel-in-progress: false
+
+env:
+  GAME_DIR: games/GAME_SLUG
+
+jobs:
+  upload:
+    name: Upload to Roblox
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ROBLOX_UPLOAD_KEY: ${{ secrets.ROBLOX_GROUP_KEY || secrets.ROBLOX_PUBLISH_KEY }}
+      ROBLOX_CREATOR_GROUP_ID: ${{ vars.ROBLOX_GROUP_ID }}
+      ROBLOX_CREATOR_USER_ID: ${{ vars.ROBLOX_OWNER_USER_ID }}
+      ASSET_TYPE: ${{ inputs.type }}
+      ASSET_PATH: ${{ inputs.path }}
+      ASSET_BRANCH: ${{ inputs.branch }}
+      ASSET_NAME: ${{ inputs.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the key and the owner are set
+        run: |
+          if [ -z "$ROBLOX_UPLOAD_KEY" ]; then
+            echo "::error::Neither ROBLOX_GROUP_KEY nor ROBLOX_PUBLISH_KEY is set. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+          if [ -z "$ROBLOX_CREATOR_GROUP_ID" ] && [ -z "$ROBLOX_CREATOR_USER_ID" ]; then
+            echo "::error::Set the repo variable ROBLOX_GROUP_ID (a group owns the game) or ROBLOX_OWNER_USER_ID. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+
+      # The files come out of git (this checkout, or the named branch), so every path must be a file in the repo.
+      # All of them are checked before anything is uploaded.
+      - name: Take the files from the repo
+        run: |
+          read -r -a paths <<<"$(printf '%s' "$ASSET_PATH" | tr ',\n\r\t' '    ')"
+          if [ "${#paths[@]}" = 0 ]; then
+            echo "::error::no path given"
+            exit 1
+          fi
+          if [ "${#paths[@]}" -gt 1 ] && [ -n "$ASSET_NAME" ]; then
+            echo "::error::name is for a single file; leave it empty for a batch (each keeps its file name)"
+            exit 1
+          fi
+          rev=HEAD
+          if [ -n "$ASSET_BRANCH" ]; then
+            git fetch --no-tags --depth 1 origin "$ASSET_BRANCH"
+            rev=FETCH_HEAD
+          fi
+          for path in "${paths[@]}"; do
+            case "$path" in
+            /* | *..*)
+              echo "::error::path must be relative to the repo root, without '..': $path"
+              exit 1
+              ;;
+            esac
+            mkdir -p "$(dirname "$path")"
+            if ! git show "$rev:$path" >"$path.upload"; then
+              echo "::error::$path is not a file on ${ASSET_BRANCH:-$GITHUB_REF_NAME}"
+              exit 1
+            fi
+            mv "$path.upload" "$path"
+            echo "Taking $path from ${ASSET_BRANCH:-$GITHUB_REF_NAME} ($(git rev-parse --short "$rev"))"
+          done
+          printf '%s\n' "${paths[@]}" >"$RUNNER_TEMP/upload-paths"
+
+      # One file at a time; one that fails does not stop the rest, and the run fails at the end if any did.
+      - name: Upload
+        run: |
+          mapfile -t paths <"$RUNNER_TEMP/upload-paths"
+          failed=0
+          for path in "${paths[@]}"; do
+            bash "$GAME_DIR/tools/opencloud/upload-asset.sh" "$path" "$ASSET_NAME" || failed=$((failed + 1))
+          done
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::$failed file(s) did not upload; see the log above"
+            exit 1
+          fi

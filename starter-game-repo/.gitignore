@@ -28,5 +28,5 @@ __pycache__/
 Thumbs.db
 .DS_Store
 
-# Node tooling, if a test runner is added later
+# Node tooling (tools/cloudcheck)
 node_modules/

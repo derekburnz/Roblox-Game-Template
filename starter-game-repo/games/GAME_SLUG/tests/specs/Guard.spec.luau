@@ -1,0 +1,32 @@
+--!strict
+return function()
+	local Guard = require(game:GetService("ReplicatedStorage").Shared.Guard)
+
+	describe("Guard", function()
+		it("takes plain ids and refuses the rest", function()
+			expect(Guard.id("sword_01")).to.equal("sword_01")
+			expect(Guard.id("")).to.equal(nil)
+			expect(Guard.id("a b")).to.equal(nil)
+			expect(Guard.id(string.rep("a", Guard.MAX_ID_LENGTH + 1))).to.equal(nil)
+			expect(Guard.id(5)).to.equal(nil)
+		end)
+
+		it("refuses NaN, fractions and out of range numbers", function()
+			expect(Guard.int(3, 1, 5)).to.equal(3)
+			expect(Guard.int(0 / 0, 1, 5)).to.equal(nil)
+			expect(Guard.int(2.5, 1, 5)).to.equal(nil)
+			expect(Guard.int(6, 1, 5)).to.equal(nil)
+			expect(Guard.number(math.huge, 0, 10)).to.equal(nil)
+			expect(Guard.number(2.5, 0, 10)).to.equal(2.5)
+		end)
+
+		it("checks bools, lists and text", function()
+			expect(Guard.bool(true)).to.equal(true)
+			expect(Guard.bool("true")).to.equal(nil)
+			expect(Guard.oneOf("red", { "red", "blue" })).to.equal("red")
+			expect(Guard.oneOf("green", { "red", "blue" })).to.equal(nil)
+			expect(Guard.text("hi", 10)).to.equal("hi")
+			expect(Guard.text(string.rep("x", 11), 10)).to.equal(nil)
+		end)
+	end)
+end
