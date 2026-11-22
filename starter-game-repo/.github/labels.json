@@ -13,6 +13,6 @@
     { "name": "needs-owner", "color": "d93f0b", "description": "Waits on the owner: an OK, their PC or a Roblox account step" },
     { "name": "claim", "color": "fef2c0", "description": "Someone is working on this; the comment says who" },
     { "name": "on-hold", "color": "bfbfbf", "description": "Parked by the owner; not being worked and never auto-merged" },
-    { "name": "automerge", "color": "0e8a16", "description": "Fallback when GitHub refuses native auto-merge: merge by hand once checks pass" }
+    { "name": "automerge", "color": "0e8a16", "description": "Fallback when GitHub refuses native auto-merge: the automerge workflow merges once both checks pass" }
   ]
 }

@@ -9,12 +9,12 @@ Roblox runs one server per game instance and a client on every player's device. 
 
 ## The checklist (apply to every remote handler)
 1. **Type check every argument** with a guard before using it. Luau types are compile-time only; a client can send a table where you expect a string.
-2. **Range check** numbers (quantities 1 to 99, no NaN, no negative, no `math.huge`). Use `Guard.isInt(n, min, max)`.
+2. **Range check** numbers (quantities 1 to 99, no NaN, no negative, no `math.huge`). Use `Guard.int(n, min, max)` (it returns nil for anything else).
 3. **Id check** against `Catalog`: an unknown item id means drop the request, with no error reply.
 4. **Ownership check**: the item, slot or order must belong to that player on the server's own record.
 5. **State check**: can this action happen now (the order is pending, the pickup still exists, the slot is empty)?
 6. **Distance check** for world interactions: the player's HumanoidRootPart within `Config.*.Range` studs of the target, computed on the server.
-7. **Rate limit** every remote per player (`RateLimit.new(perSecond)`); drop silently when exceeded; log repeat offenders with `warn`.
+7. **Rate limit** every remote per player (`NetService.on(name, { perSecond = n }, handler)` does it); drop silently when exceeded; log repeat offenders with `warn`.
 8. **Server cooldowns** for gameplay actions, stored on the server, never read from the client.
 9. **Never let the client set** currency, inventory, ownership, upgrade level or the position of anything that matters. The client sends intents, the server computes outcomes.
 10. **Reply with facts, not acknowledgements**: after a purchase the server sends the new profile snapshot; the client renders what it receives.
@@ -31,75 +31,25 @@ Roblox runs one server per game instance and a client on every player's device. 
 | `RequestRename(text)` | profanity, personal info | filter with TextService; length 1 to 20; rate limit 1 per 10 s |
 | Any | flood remotes to lag the server | global per-player limiter plus per-remote limiters; kick after N warnings only if clearly abusive |
 
-## Guard module (src/shared/Guard.luau)
+## The starter's modules
+The game repo ships these, so a new remote is a few lines. Read them before writing a handler.
+- `src/shared/Guard.luau`: each check returns the cleaned value or nil. `Guard.id(v)`, `Guard.int(v, min, max)`, `Guard.number(v, min, max)` (finite only), `Guard.bool(v)`, `Guard.oneOf(v, list)`, `Guard.text(v, maxLength)`. A catalog check (the id exists, the player owns it) is the handler's own, after `Guard.id`.
+- `src/server/Util/RateLimiter.luau`: a token bucket per key, `RateLimiter.new(maxCalls, windowSeconds)` then `limiter:allow(player)`.
+- `src/server/Services/NetService.luau`: creates every remote listed in `src/shared/Remotes.luau` and is the only way client calls come in. `NetService.on(name, { perSecond = 2 }, handler)` drops calls over the limit before the handler runs, runs the handler in a pcall, and forgets each player's buckets when they leave.
+
 ```lua
---!strict
--- Guard: runtime type guards for remote arguments. Everything from the client is `unknown` until it passes one.
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Catalog = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Catalog"))
-
-local Guard = {}
-
-function Guard.isString(value: unknown, maxLen: number?): boolean
-	return type(value) == "string" and #(value :: string) <= (maxLen or 64)
-end
-
-function Guard.isInt(value: unknown, min: number, max: number): boolean
-	if type(value) ~= "number" then
-		return false
+NetService.on("RequestUse", { perSecond = 4 }, function(player: Player, rawSlot: unknown)
+	local slotId = Guard.id(rawSlot)
+	if slotId == nil then
+		return
 	end
-	local n = value :: number
-	return n == n and n == math.floor(n) and n >= min and n <= max
-end
-
-function Guard.isItemId(value: unknown): boolean
-	return type(value) == "string" and Catalog.Items[value :: string] ~= nil
-end
-
-return Guard
-```
-
-## Rate limiter (src/server/Util/RateLimit.luau)
-```lua
---!strict
--- RateLimit: token bucket per player. allow(player) returns false when the player is over budget.
-local Players = game:GetService("Players")
-
-local RateLimit = {}
-RateLimit.__index = RateLimit
-
-export type RateLimit = typeof(setmetatable({} :: { rate: number, burst: number, buckets: { [Player]: { tokens: number, last: number } } }, RateLimit))
-
-function RateLimit.new(perSecond: number, burst: number?): RateLimit
-	local self = setmetatable({ rate = perSecond, burst = burst or perSecond, buckets = {} }, RateLimit)
-	Players.PlayerRemoving:Connect(function(player)
-		self.buckets[player] = nil
-	end)
-	return self
-end
-
-function RateLimit.allow(self: RateLimit, player: Player): boolean
-	local now = os.clock()
-	local bucket = self.buckets[player]
-	if not bucket then
-		bucket = { tokens = self.burst, last = now }
-		self.buckets[player] = bucket
-	end
-	bucket.tokens = math.min(self.burst, bucket.tokens + (now - bucket.last) * self.rate)
-	bucket.last = now
-	if bucket.tokens < 1 then
-		return false
-	end
-	bucket.tokens -= 1
-	return true
-end
-
-return RateLimit
+	-- ownership, range and cooldown checks here, on the server
+end)
 ```
 
 ## Data saving
 DataStoreService is Roblox's key and value store, with request budgets and occasional failures. Rules:
-- **Session locking**: a profile may be open on one server at a time. If a player hops servers while the old one still holds the lock, wait or steal only after a timeout. Recommended: vendor a proven save library (for example ProfileStore, a single ModuleScript) into `src/server/Vendor/`; it implements locking, retries and reconcile for new default fields. Never edit or reformat a vendored file.
+- **Session locking**: a profile may be open on one server at a time. If a player hops servers while the old one still holds the lock, wait or steal only after a timeout. The starter ships ProfileStore (a proven save library, MIT) in `src/server/Vendor/` and `Services/DataService.luau` on top of it; it implements locking, retries and autosave. Never edit or reformat a vendored file. The save's shape and migrations are in `src/shared/SaveSchema.luau`.
 - **Load before play**: if the load fails, do not give the player a default profile that will later overwrite their real one. Kick with a friendly message ("Could not load your save, please rejoin") instead.
 - **Reconcile, never reset**: new fields get defaults; existing fields are never dropped on a schema change. Keep a `Version` field.
 - **Mixed servers**: a publish does not restart servers, so old and new code run at the same time. Ask what an old server does with a save a new server wrote, and the other way round. A new saved id (a new item or prize) goes behind a live switch that stays off until old servers are gone, or an old server's save check may drop it.

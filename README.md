@@ -54,7 +54,7 @@ You are the coordinator of a new project. Follow these steps in order. Do not st
 2. Copy everything inside `starter-game-repo/` into the new repo's root.
 3. In the new repo run `tools/init-game.sh <game-slug> <GamePrefix> "<Game Name>" <owner>/<game-repo>`. It names the game folder, moves `dot-claude/` to `.claude/` and fills the game's name into every file.
 4. Put the agreed design at `docs/design/<game-slug>/gdd.md`. Commit and push to `main`.
-5. Create the labels listed in `.github/labels.json`.
+5. The `repo-labels` workflow creates the labels in `.github/labels.json` on that first push; if it did not run, start it from Actions.
 6. Walk the owner through `docs/setup-guide.md` steps 8 and 9: the Open Cloud key and repo variables, then the required check and auto-merge. Leave `AUTO_PUBLISH` unset until the first build is worth publishing. Leave `AUTO_RESTART` unset.
 7. Open the first issues from the milestone plan (Task form, one area label each).
 8. Update the project instructions and memory with the repo names and the Roblox ids.
@@ -109,10 +109,12 @@ The rule of thumb for models: Fable for design, architecture and hard bugs; Opus
 | `library/Growth-Agent/story-kit/` | Tools for the animated story video: voice, re-voice, assemble |
 | `library/Motion-FX-Agent/video-tools/` | Recording tips, a shot list template, the page video cut and the story clip cut |
 | `memory/` | Word for word copies of the project instructions and project memory, written during setup and kept current by Sync-Agent |
-| `starter-game-repo/` | Everything a new game repo starts with: `CLAUDE.md` (studio rules), `dot-claude/` (agent definitions and skills; becomes `.claude/`), issue forms and labels, the Rojo layout, `rokit.toml`, the check gate, and the check, publish, restart and flags workflows |
+| `starter-game-repo/` | Everything a new game repo starts with: `CLAUDE.md` (studio rules), `dot-claude/` (agent definitions and skills; becomes `.claude/`), issue forms and labels, the Rojo layout, `rokit.toml`, the check gate, starter modules (remotes, saves, analytics, restart notice), unit tests and the UI gate (`tools/cloudcheck`), and the check, automerge, labels, publish, restart, flags, upload and asset permission workflows |
 | `.github/ISSUE_TEMPLATE/` | A form for reporting a problem with this template |
 | `.github/labels.json` | The `template` label the problem form uses |
 | `CHOICES.md` | The choices made in this template, one line each |
 
 ### Licences
 The skills under `starter-game-repo/dot-claude/skills/` include third-party skills under the MIT licence. Each keeps its `LICENSE` file, and `THIRD_PARTY.md` in that folder lists where each came from. Keep those files if you share or publish a copy.
+
+The game repo's `src/server/Vendor/ProfileStore.luau` is [ProfileStore](https://github.com/MadStudioRoblox/ProfileStore) by loleris, under the MIT licence, kept exactly as shipped. The UI gate and test runner in `tools/cloudcheck` use [`@luau-rs/luau`](https://www.npmjs.com/package/@luau-rs/luau) from npm.

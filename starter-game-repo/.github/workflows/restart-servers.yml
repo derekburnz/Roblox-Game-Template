@@ -1,10 +1,23 @@
 # Restart every running server onto the newest published version, without publishing.
 # A restart disconnects every player, so start this only when the owner says so in their own words.
-# Needs: secret ROBLOX_PUBLISH_KEY with universe Write, variable ROBLOX_UNIVERSE_ID.
+# With warn_players on (the default), every server first shows its players a countdown (10 and 2 minutes, 30 seconds,
+# then now; tools/opencloud/restart-countdown.sh and src/server/Services/RestartNoticeService.luau), which adds the
+# countdown's length to the run. Without the messaging permission on the key the countdown is skipped with a warning.
+# Needs: secret ROBLOX_PUBLISH_KEY with universe Write (and universe-messaging-service:publish for the countdown),
+# variable ROBLOX_UNIVERSE_ID (docs/setup-guide.md step 8).
 name: restart-servers
 
 on:
   workflow_dispatch:
+    inputs:
+      warn_players:
+        description: "Warn every server first with an in-game countdown (adds its length, 10 minutes by default)"
+        type: boolean
+        default: true
+      warnings:
+        description: "With warn_players: the countdown, in seconds before the restart, largest first (\"300 60 0\" for 5 minutes)"
+        type: string
+        default: "600 120 30 0"
 
 permissions:
   contents: read
@@ -21,11 +34,27 @@ jobs:
   restart:
     name: Restart servers for updates
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 75 # up to 60 for the countdown plus the restart
     env:
       ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_PUBLISH_KEY }}
+    defaults:
+      run:
+        working-directory: ${{ env.GAME_DIR }}
     steps:
       - uses: actions/checkout@v5
-      - name: Restart
-        working-directory: ${{ env.GAME_DIR }}
+
+      - name: Check the key and the experience id are set
+        run: |
+          if [ -z "$ROBLOX_PUBLISH_KEY" ] || [ -z "$UNIVERSE_ID" ]; then
+            echo "::error::Set the secret ROBLOX_PUBLISH_KEY and the variable ROBLOX_UNIVERSE_ID. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+
+      - name: Warn players in game
+        if: inputs.warn_players
+        env:
+          WARNINGS: ${{ inputs.warnings }}
+        run: bash tools/opencloud/restart-countdown.sh
+
+      - name: Restart running servers
         run: bash tools/opencloud/restart-servers.sh

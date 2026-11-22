@@ -30,6 +30,8 @@ Rojo copies the files under `games/<game-slug>/src` into Studio's tree as you sa
 ## 6. The check gate
 In `games/<game-slug>` run `./check.ps1` (PowerShell) or `./check.sh` (Git Bash). All four checks must pass before a pull request. The first run downloads the Roblox API types.
 
+The unit tests, a strict type check and the UI gate (every window at phone, tablet and desktop sizes) need only Node 20 or newer, no Studio: in `games/<game-slug>/tools/cloudcheck` run `npm ci` once, then `npm run check`. CI runs the same on every pull request. See `tools/cloudcheck/README.md`.
+
 ## 7. Studio and Blender connectors (optional)
 The agents can drive Studio (playtests, screenshots, console output) and Blender through MCP connectors. A connector is a small local program that lets Claude call a tool on your PC. Set them up when the first task needs them. The `roblox-doctor` skill checks the whole setup in one go and says what is missing.
 
@@ -46,14 +48,22 @@ Open Cloud is Roblox's web API. A key is a password for it, so it is created by 
 | universe | `universe:write` | Restart servers for updates (`restart-servers` workflow) |
 | universe-datastores | `objects:read`, `objects:create`, `objects:update`, `objects:delete` | Read and flip the live switches (`flags` workflow) |
 
-Add more only when a workflow needs them: `universe.analytics:read` to read analytics, `asset:read` and `asset:write` for uploads, `universe-messaging-service:publish` for an in-game restart warning. Why so narrow: if a key leaks, it can do only what it was given.
+Add more only when a workflow needs them:
+
+| API system | Operations | Workflow |
+|---|---|---|
+| universe-messaging-service | `universe-messaging-service:publish` | the in-game countdown before a restart (`restart-servers`, and `publish` when it restarts) |
+| assets | `asset:read`, `asset:write` | `upload-asset` (pictures and sounds) |
+| asset-permissions | `asset-permissions:write` | `asset-permissions` (share the game's pictures and sounds with the experience) |
+| universe.analytics | `universe.analytics:read` | reading analytics | Why so narrow: if a key leaks, it can do only what it was given.
 
 4. **Accepted IP addresses**: `0.0.0.0/0`. Why: GitHub's runners have no fixed address.
 5. Set an expiry date if you like, then **Save and Generate Key** and copy it.
 6. GitHub > this repo > **Settings** > **Secrets and variables** > **Actions**:
    - **Secrets** tab, New repository secret: `ROBLOX_PUBLISH_KEY` = the key.
-   - Optional second secret `ROBLOX_GROUP_KEY`: a key created under the group with only `asset:read` and `asset:write`, for group-owned uploads. Keep it separate so the publish key cannot upload and the upload key cannot publish.
+   - Optional second secret `ROBLOX_GROUP_KEY`: a key created under the group with only `asset:read`, `asset:write` and `asset-permissions:write`, for group-owned uploads. Keep it separate so the publish key cannot upload and the upload key cannot publish.
    - **Variables** tab: `ROBLOX_UNIVERSE_ID` and `ROBLOX_PLACE_ID` (the ids from step 4).
+   - **Variables** tab, for uploads: `ROBLOX_GROUP_ID` when a group owns the game (uploads are then owned by the group, and `ROBLOX_GROUP_KEY` must be a key created under the group), otherwise `ROBLOX_OWNER_USER_ID`, the owner's Roblox user id. An upload owned by a person does not load in a group-owned game until `asset-permissions` shares it.
    - **Variables** tab: `AUTO_PUBLISH` = `true` once you want every merge to main to publish itself. Leave `AUTO_RESTART` unset: set to `true` it restarts servers after every automatic publish, which disconnects players.
 7. Try it: Actions > **publish** > Run workflow with `Saved`. A green run adds a version to the place history without going live.
 
@@ -61,11 +71,11 @@ A 401 or 403 in a workflow means the key lacks a permission or its IP list block
 
 ## 9. Required check and auto-merge
 1. Settings > General > Pull Requests: tick **Allow auto-merge**.
-2. Settings > Rules > Rulesets > New branch ruleset for `main`: require a pull request, and require the status check named exactly `Rojo sourcemap, luau-lsp, Selene, StyLua`. Why: auto-merge waits for required checks, so with none it would merge at once, before the gate ran.
+2. Settings > Rules > Rulesets > New branch ruleset for `main`: require a pull request, and require the two status checks named exactly `Rojo sourcemap, luau-lsp, Selene, StyLua` and `Unit tests, strict types, UI gate`. Why: auto-merge waits for required checks, so with none it would merge at once, before the gate ran.
 3. Do not require branches to be up to date unless merges are rare: with many pull requests a day each one would re-run forever.
 
 ## 10. Labels and forms
-The labels in `.github/labels.json` are created by the coordinator during setup. The Task and Claim work forms in `.github/ISSUE_TEMPLATE/` appear under Issues > New issue.
+The labels in `.github/labels.json` are created by the `repo-labels` workflow: it runs by itself whenever that file changes on main, or from Actions > **repo-labels** > Run workflow. The Task and Claim work forms in `.github/ISSUE_TEMPLATE/` appear under Issues > New issue.
 
 ## Troubleshooting
 - **Studio says "Failed to fetch place info":** log out of Studio, close every Studio window and sign in again.

@@ -1,0 +1,60 @@
+# Share the pictures and sounds the game uses with the experience, so they keep working when the assets and the game
+# have different owners (assets uploaded by a person while a group owns the game, or a game that moved to a group).
+# list prints every rbxassetid in the shipped code (main's src and Rojo model files); grant gives the experience
+# Use permission on each one. Start it from the Actions tab (asset-permissions > Run workflow) or from a thread. Run
+# grant again after new pictures or sounds land; ids that already have the permission are fine.
+# Needs: secret ROBLOX_PUBLISH_KEY (or ROBLOX_GROUP_KEY for group-owned assets) with asset-permissions:write,
+# variable ROBLOX_UNIVERSE_ID (docs/setup-guide.md step 8). Script: tools/opencloud/asset-permissions.sh.
+name: asset-permissions
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "list | grant (grant: Use permission for the experience on every id the game uses)"
+        type: choice
+        options: [list, grant]
+        default: list
+      subject_type:
+        description: "grant only: who gets Use permission. Universe (default, the experience) or User (a Studio account)"
+        type: choice
+        options: [Universe, User]
+        default: Universe
+      subject_id:
+        description: "grant only: the user id when subject_type is User (leave empty for the experience)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asset-permissions
+  cancel-in-progress: false
+
+jobs:
+  asset-permissions:
+    name: Asset permissions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_GROUP_KEY || secrets.ROBLOX_PUBLISH_KEY }}
+      ROBLOX_UNIVERSE_ID: ${{ vars.ROBLOX_UNIVERSE_ID }}
+      ACTION: ${{ inputs.action }}
+      SUBJECT_TYPE: ${{ inputs.subject_type }}
+      SUBJECT_ID: ${{ inputs.subject_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Check the key is set
+        if: inputs.action == 'grant'
+        run: |
+          if [ -z "$ROBLOX_PUBLISH_KEY" ]; then
+            echo "::error::Neither ROBLOX_GROUP_KEY nor ROBLOX_PUBLISH_KEY is set. Steps: docs/setup-guide.md step 8."
+            exit 1
+          fi
+
+      - name: List or grant
+        run: bash games/GAME_SLUG/tools/opencloud/asset-permissions.sh "$ACTION"

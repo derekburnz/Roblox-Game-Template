@@ -12,7 +12,8 @@
 #
 # Needs: secret ROBLOX_PUBLISH_KEY, variables ROBLOX_UNIVERSE_ID and ROBLOX_PLACE_ID (docs/setup-guide.md step 8).
 # This is a minimal outline. Worth adding once the game has saves: an engine smoke test before going live
-# (Open Cloud Luau Execution) and an in-game countdown before a restart.
+# (Open Cloud Luau Execution). A restart from here first shows players the in-game countdown
+# (tools/opencloud/restart-countdown.sh).
 name: publish
 
 on:
@@ -53,7 +54,7 @@ jobs:
       (vars.AUTO_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40 # 20 for the build and upload, plus the countdown when it restarts
     env:
       ROBLOX_PUBLISH_KEY: ${{ secrets.ROBLOX_PUBLISH_KEY }}
     steps:
@@ -92,6 +93,13 @@ jobs:
       - name: Upload (Saved or Published)
         working-directory: ${{ env.GAME_DIR }}
         run: bash tools/opencloud/publish.sh "${{ github.event_name == 'workflow_dispatch' && inputs.version_type || 'Published' }}" build.rbxl
+
+      - name: Warn players in game before the restart (10 and 2 minutes, 30 seconds, now)
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.version_type == 'Published' && inputs.restart_servers) ||
+          (github.event_name != 'workflow_dispatch' && vars.AUTO_RESTART == 'true')
+        working-directory: ${{ env.GAME_DIR }}
+        run: bash tools/opencloud/restart-countdown.sh
 
       - name: Restart running servers (hand run with restart_servers, or AUTO_RESTART)
         if: >-

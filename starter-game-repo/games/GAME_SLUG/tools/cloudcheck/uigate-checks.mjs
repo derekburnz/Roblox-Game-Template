@@ -1,0 +1,646 @@
+// The UI gate's checks, baseline and report (uigate.mjs). Every number is in real screen pixels, after UIScale.
+import fs from 'node:fs';
+import path from 'node:path';
+
+// The ui-review skill's three sizes. inset is Roblox's top bar (GuiService:GetGuiInset()).
+export const PROFILES = [
+  { name: 'desktop', width: 1280, height: 720, touch: false, inset: 58 },
+  { name: 'laptop', width: 1366, height: 768, touch: false, inset: 58 },
+  { name: 'phone', width: 844, height: 390, touch: true, inset: 58 },
+];
+
+// More devices, run on their own with --devices: a tablet held
+// sideways (iPad Air, 1180 x 820 points), the smallest phone still sold (iPhone SE, 667 x 375) and a console on a
+// 1080p TV, which plays with a gamepad (no tap floor, the mouse one stands in for a cursor).
+export const DEVICE_PROFILES = [
+  { name: 'tablet', width: 1180, height: 820, touch: true, inset: 58 },
+  { name: 'smallphone', width: 667, height: 375, touch: true, inset: 58 },
+  { name: 'console', width: 1920, height: 1080, touch: false, inset: 58 },
+  { name: 'a06', width: 705, height: 338, touch: true, inset: 58 }, // a Galaxy A06's game view in Studio's Device Simulator (800 x 360 screen)
+];
+
+// Tablets (players on tablets can leave sooner than on phones), run on their own with --tablets. The
+// place keeps Roblox's default landscape orientation, so each is held sideways, in points: iPad mini (1133 x 744),
+// a 4:3 iPad (1024 x 768), iPad Pro 12.9 (1366 x 1024), a 16:10 Android tablet (1280 x 800) and a Fire 7 (1024 x 600).
+// The 10th-gen iPad (1180 x 820) is 'tablet' in DEVICE_PROFILES.
+export const TABLET_PROFILES = [
+  { name: 'ipadmini', width: 1133, height: 744, touch: true, inset: 58 },
+  { name: 'ipad43', width: 1024, height: 768, touch: true, inset: 58 },
+  { name: 'ipadpro', width: 1366, height: 1024, touch: true, inset: 58 },
+  { name: 'tab1610', width: 1280, height: 800, touch: true, inset: 58 },
+  { name: 'fire7', width: 1024, height: 600, touch: true, inset: 58 },
+];
+
+export const LIMITS = {
+  tapTouch: 44, // Theme.sizes.touchMin, Apple and Google's own floor
+  tapMouse: 36,
+  tapSlack: 0.5,
+  text: 9, // textTiny 12 at the phone's 0.75 scale
+  textSlack: 0.25,
+  edge: 2, // px past the screen edge before it counts
+  fonts: 2, // Fredoka One and Nunito
+  topbarLeft: 184, // Roblox's menu and chat buttons sit left of TopbarInset.Min.X
+  overlap: 0.25, // share of the smaller pressable covered by another
+  near: 1, // px between what two buttons draw (outlines left out: touching outlines are a look), or text under one
+  catcher: 0.2, // a pressable this share of the screen or more is a catcher or a cover (a dim, a reel), not a button
+};
+
+// gate: fails the run when new; warn: in the report only
+const GATED = new Set(['tap', 'text', 'offscreen', 'topbar', 'fonts', 'jitter', 'error', 'tiles', 'strokeclip', 'darkstroke']);
+
+// The HUD's buttons (a tile can sit on its neighbours, or a key badge half under one): a Components/Button is a holder with a Depth frame (the outlined shape) and a Face. What a
+// tile draws is every piece under it, each grown by its outline (UIStroke Border draws outside the box): the
+// square, its label, a key cap, a red dot, a glow. The invisible Hit pad that grows a tap target is
+// left out. Two tiles fail when what they draw comes closer than the larger of their two outlines.
+// Two tiles both in the left column (a menu grid, a store button, an arrow tab) or the bottom right corner are gated;
+// any other pair (the top right icons, the bottom row, the carry banner's Drop) is reported as 'tilesnear', a
+// warning, until those rows get the same pass. A
+// list that opens over the icon row (Pop) sits over it on purpose and is left out.
+export const HUD_GUI = 'HUD'; // the ScreenGui name of the always-on HUD (src/client/UI)
+const GATED_TILES = /^HUD\/Root\/[^/]+$/; // HUD tiles that must keep their outline apart
+const SKIPPED_TILES = /^HUD\/Root\/Pop\//; // pop ups that sit over the HUD on purpose
+
+// What one piece draws, or null for an empty holder: its box grown by its outline, or for a label with no fill its
+// text (a label's box is often wider than its words), grown by the text's outline.
+// `bare`: without the outlines ('s crowd check: outlines that touch are a look, not an overlap).
+function drawnRect(node, bare = false) {
+  const filled = node.bgT !== undefined && node.bgT < 0.95;
+  if (node.bs || filled || (node.image && node.imageT < 0.95)) {
+    const grow = node.bs && !bare ? node.bs[1] : 0;
+    return { x1: node.x - grow, y1: node.y - grow, x2: node.x + node.w + grow, y2: node.y + node.h + grow };
+  }
+  if (node.text === undefined) return null;
+  const w = Math.min(node.w, node.tw);
+  const h = Math.min(node.h, node.th);
+  const x = node.tx === 'Left' ? node.x : node.tx === 'Right' ? node.x + node.w - w : node.x + (node.w - w) / 2;
+  const y = node.ty === 'Top' ? node.y : node.ty === 'Bottom' ? node.y + node.h - h : node.y + (node.h - h) / 2;
+  const grow = node.ts2 && !bare ? node.ts2[1] : 0;
+  return { x1: x - grow, y1: y - grow, x2: x + w + grow, y2: y + h + grow };
+}
+
+// where a label's words sit: inside its UIPadding, at their measured size and alignment, without the outline.
+// A filled label's box is wider than its words (a card's banner can pad them clear of its X).
+function wordsRect(node) {
+  const [pl, pr, pt, pb] = node.pad || [0, 0, 0, 0];
+  const iw = Math.max(0, node.w - pl - pr);
+  const ih = Math.max(0, node.h - pt - pb);
+  const w = Math.min(iw, node.tw);
+  const h = Math.min(ih, node.th);
+  const left = node.x + pl;
+  const top = node.y + pt;
+  const x = node.tx === 'Left' ? left : node.tx === 'Right' ? left + iw - w : left + (iw - w) / 2;
+  const y = node.ty === 'Top' ? top : node.ty === 'Bottom' ? top + ih - h : top + (ih - h) / 2;
+  return { x1: x, y1: y, x2: x + w, y2: y + h };
+}
+
+export function hudTiles(nodes) {
+  const byPath = new Map(nodes.map((n) => [n.path, n]));
+  const tiles = [];
+  for (const node of nodes) {
+    if (node.gui !== HUD_GUI) continue;
+    const depth = byPath.get(node.path + '/Depth');
+    if (!depth || !depth.bs || !byPath.has(node.path + '/Face')) continue;
+    if (SKIPPED_TILES.test(node.path)) continue;
+    tiles.push({ node, outline: depth.bs[1], rect: null });
+  }
+  for (const tile of tiles) {
+    const prefix = tile.node.path + '/';
+    let r = drawnRect(tile.node);
+    for (const part of nodes) {
+      if (!part.path.startsWith(prefix)) continue;
+      const rest = part.path.slice(prefix.length);
+      if (rest === 'Hit' || rest.startsWith('Hit/')) continue;
+      const d = drawnRect(part);
+      if (!d) continue;
+      r = r ? { x1: Math.min(r.x1, d.x1), y1: Math.min(r.y1, d.y1), x2: Math.max(r.x2, d.x2), y2: Math.max(r.y2, d.y2) } : d;
+    }
+    tile.rect = r;
+  }
+  return tiles;
+}
+
+function visibleRect(node) {
+  let x1 = node.x;
+  let y1 = node.y;
+  let x2 = node.x + node.w;
+  let y2 = node.y + node.h;
+  if (node.clip) {
+    x1 = Math.max(x1, node.clip[0]);
+    y1 = Math.max(y1, node.clip[1]);
+    x2 = Math.min(x2, node.clip[2]);
+    y2 = Math.min(y2, node.clip[3]);
+  }
+  if (x2 - x1 <= 0.5 || y2 - y1 <= 0.5) return null;
+  return { x1, y1, x2, y2 };
+}
+
+function intersect(a, b) {
+  const x1 = Math.max(a.x1, b.x1);
+  const y1 = Math.max(a.y1, b.y1);
+  const x2 = Math.min(a.x2, b.x2);
+  const y2 = Math.min(a.y2, b.y2);
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
+  return { x1, y1, x2, y2, w: x2 - x1, h: y2 - y1 };
+}
+
+const area = (r) => (r.x2 - r.x1) * (r.y2 - r.y1);
+const px = (n) => `${Math.round(n * 10) / 10}`;
+const label = (node) => (node.text ? ` "${node.text.slice(0, 40)}"` : '');
+
+// Every finding for one scene at one screen size.
+// Hard to read bold text: dark letters inside a
+// dark text outline run together into a blob. Relative luminance (WCAG) of a hex colour, and the contrast of two.
+function luminance(hex) {
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+export function checkScene(profile, scene) {
+  const W = profile.width;
+  const H = profile.height;
+  const findings = [];
+  const add = (check, node, message, where) =>
+    findings.push({
+      profile: profile.name,
+      scene: scene.scene,
+      check,
+      gated: GATED.has(check),
+      path: where ?? (node ? node.path : ''),
+      box: node ? [node.x, node.y, node.w, node.h] : null,
+      message,
+    });
+
+  const screen = { x1: 0, y1: 0, x2: W, y2: H };
+  // the row of the nearest scrolling list a piece sits in (the list's own child): null while that row is scrolled
+  // part way out, else the sides on which the list's content ends (nothing more to scroll to), so a row that only
+  // happens to sit flush with the window mid-scroll is not counted
+  const byPath = new Map(scene.nodes.map((n) => [n.path, n]));
+  const rowsOf = new Map();
+  for (const n of scene.nodes) {
+    const cut = n.path.lastIndexOf('/');
+    const parent = byPath.get(n.path.slice(0, cut));
+    if (!parent || !parent.scroller) continue;
+    if (!rowsOf.has(parent.path)) rowsOf.set(parent.path, []);
+    rowsOf.get(parent.path).push(n);
+  }
+  const listEnds = (node) => {
+    const parts = node.path.split('/');
+    for (let i = parts.length - 1; i > 0; i--) {
+      const list = byPath.get(parts.slice(0, i).join('/'));
+      if (!list || !list.scroller) continue;
+      const row = byPath.get(parts.slice(0, i + 1).join('/'));
+      if (!row || !row.clip) break;
+      const [c1, c2, c3, c4] = row.clip;
+      if (row.x < c1 - 0.5 || row.y < c2 - 0.5 || row.x + row.w > c3 + 0.5 || row.y + row.h > c4 + 0.5) return null;
+      const rows = rowsOf.get(list.path) || [row];
+      return {
+        left: rows.every((r) => r.x >= c1 - 0.5),
+        top: rows.every((r) => r.y >= c2 - 0.5),
+        // a list that scrolls on past its window cuts the row at that edge on purpose (scroll to see it)
+        right: !list.moreX && rows.every((r) => r.x + r.w <= c3 + 0.5),
+        bottom: !list.moreY && rows.every((r) => r.y + r.h <= c4 + 0.5),
+      };
+    }
+    // no list, but a strip that slides behind its window (the crate reel) runs on past the window's edge, so
+    // the tile at that edge is cut on purpose as it rolls by
+    const out = { left: true, top: true, right: true, bottom: true };
+    if (node.clip) {
+      const [c1, c2, c3, c4] = node.clip;
+      for (let i = parts.length - 1; i > 0; i--) {
+        const strip = byPath.get(parts.slice(0, i).join('/'));
+        if (!strip || !strip.clip || strip.clip.some((edge, k) => Math.abs(edge - node.clip[k]) > 0.5)) continue;
+        // by more than the tile itself: a box a pixel or two too big for its window is still a finding
+        if (c1 - strip.x > node.w) out.left = false;
+        if (c2 - strip.y > node.h) out.top = false;
+        if (strip.x + strip.w - c3 > node.w) out.right = false;
+        if (strip.y + strip.h - c4 > node.h) out.bottom = false;
+      }
+    }
+    return out;
+  };
+  const shown = [];
+  for (const node of scene.nodes) {
+    const rect = visibleRect(node);
+    if (!rect) continue; // scrolled out of its list or clipped away
+    shown.push({ node, rect });
+  }
+
+  const tapMin = profile.touch ? LIMITS.tapTouch : LIMITS.tapMouse;
+  for (const { node, rect } of shown) {
+    if (node.press && (node.w < tapMin - LIMITS.tapSlack || node.h < tapMin - LIMITS.tapSlack)) {
+      add('tap', node, `${px(node.w)} x ${px(node.h)} px, needs ${tapMin}${label(node)}`);
+    }
+    if (node.text !== undefined && node.ts < LIMITS.text - LIMITS.textSlack) {
+      add('text', node, `text renders at ${px(node.ts)} px, needs ${LIMITS.text}${label(node)}`);
+    }
+    // a word that runs past its box (TextScaled and wrapped text shrink or break instead)
+    if (node.text !== undefined && !node.scaled && !node.trunc) {
+      const inner = node.w;
+      // glyph widths are averages, so only a clear miss counts
+      if (node.tw > inner + 4 && node.tw > inner * 1.15 && !node.wrap) {
+        add('fit', node, `text about ${px(node.tw)} px wide in a ${px(inner)} px box${label(node)}`);
+      } else if (node.wrap && node.th > node.h + 4 && node.th > node.h * 1.15) {
+        add('fit', node, `wrapped text about ${px(node.th)} px tall in a ${px(node.h)} px box${label(node)}`);
+      }
+    }
+    // Cut off outlines: a Border stroke draws outside
+    // its box, so a card flush with the edge of the list or grid that clips it loses that side of its outline. Only
+    // an edge whose box is inside the clip counts, and only while the list's row it sits in is all in view; a row
+    // scrolled part way out is cut on purpose.
+    const ends = node.bs && node.clip && node.bs[2] > 0.3 ? listEnds(node) : null;
+    if (ends) {
+      const t = node.bs[1];
+      const [c1, c2, c3, c4] = node.clip;
+      const cut = [
+        ['left', node.x - c1],
+        ['top', node.y - c2],
+        ['right', c3 - (node.x + node.w)],
+        ['bottom', c4 - (node.y + node.h)],
+      ].filter(([side, room]) => ends[side] && room > -0.5 && room < t - 0.75);
+      const inside = node.x >= c1 - 0.5 && node.y >= c2 - 0.5 && node.x + node.w <= c3 + 0.5 && node.y + node.h <= c4 + 0.5;
+      if (cut.length > 0 && inside) {
+        add('strokeclip', node, `its ${px(t)} px outline is cut off on the ${cut.map(([side]) => side).join(' and ')} by the list's edge`);
+      }
+    }
+    // a dark text with a dark outline (less than 3:1 between the letters and their stroke) reads as a blob
+    if (node.text !== undefined && node.tc && node.ts2 && node.ts2[1] >= 0.5 && node.ts2[2] > 0.3 && /[\p{L}\p{N}]/u.test(node.text)) {
+      if (luminance(node.tc) < 0.2 && contrast(node.tc, node.ts2[0]) < 3) {
+        add('darkstroke', node, `dark text #${node.tc} inside a dark #${node.ts2[0]} outline${label(node)}`);
+      }
+    }
+    const matters = node.press || node.text !== undefined || node.scroller;
+    if (matters) {
+      const onScreen = intersect(rect, screen);
+      if (onScreen) {
+        const past = Math.max(-rect.x1, -rect.y1, rect.x2 - W, rect.y2 - H);
+        if (past > LIMITS.edge) add('offscreen', node, `${px(past)} px past the screen edge${label(node)}`);
+        const bar = intersect(rect, { x1: 0, y1: 0, x2: LIMITS.topbarLeft, y2: profile.inset });
+        // a tap catcher over the whole screen (the rescue bar, the catch circles) is under Roblox's buttons by design:
+        // they take their own taps first and every other spot still counts
+        const catcher = node.press && !node.text && rect.x1 <= 0 && rect.y1 <= 0 && rect.x2 >= W && rect.y2 >= H;
+        if (bar && bar.w > LIMITS.edge && bar.h > LIMITS.edge && !catcher) {
+          add('topbar', node, `under Roblox's menu buttons (top left ${LIMITS.topbarLeft} x ${profile.inset})${label(node)}`);
+        }
+      }
+      // fully off-screen is parked (slid out, or waiting to tween in), not broken
+    }
+  }
+
+  const families = new Map();
+  for (const { node } of shown) {
+    // an emoji or a symbol draws from the emoji font whatever the label's font
+    if (node.text === undefined || !/[\p{L}\p{N}]/u.test(node.text)) continue;
+    if (!families.has(node.font)) families.set(node.font, node);
+  }
+  if (families.size > LIMITS.fonts) {
+    const extra = [...families.keys()].filter((f) => f !== 'FredokaOne' && f !== 'Nunito');
+    for (const family of extra) {
+      add('fonts', families.get(family), `font ${family} on screen besides Fredoka One and Nunito`);
+    }
+  }
+
+  // pressables on top of each other in the same screen (one may steal the other's taps)
+  const presses = shown.filter(({ node }) => node.press);
+  for (let i = 0; i < presses.length; i++) {
+    for (let j = i + 1; j < presses.length; j++) {
+      const a = presses[i];
+      const b = presses[j];
+      if (a.node.gui !== b.node.gui) continue;
+      if (b.node.path.startsWith(a.node.path + '/') || a.node.path.startsWith(b.node.path + '/')) continue;
+      const both = intersect(a.rect, b.rect);
+      if (!both) continue;
+      if (area(both) > LIMITS.overlap * Math.min(area(a.rect), area(b.rect))) {
+        add('overlap', b.node, `covers ${a.node.path}${label(a.node)}`);
+      }
+    }
+  }
+
+  // Crowded buttons: what two buttons draw (the button and its pieces, without their outlines, never the invisible Hit pad)
+  // comes closer than LIMITS.near, or a button draws over a line of words that is not its own. 'crowd' is a warning for
+  // now; the audit's fixes come first, then it joins GATED.
+  const pathed = new Map(scene.nodes.map((n) => [n.path, n]));
+  const drawnOf = new Map();
+  const drawnPress = (node) => {
+    if (drawnOf.has(node.path)) return drawnOf.get(node.path);
+    let r = drawnRect(node, true);
+    const prefix = node.path + '/';
+    for (const part of scene.nodes) {
+      if (!part.path.startsWith(prefix)) continue;
+      const rest = part.path.slice(prefix.length);
+      if (rest === 'Hit' || rest.startsWith('Hit/')) continue;
+      if (!visibleRect(part)) continue;
+      const d = drawnRect(part, true);
+      if (!d) continue;
+      r = r ? { x1: Math.min(r.x1, d.x1), y1: Math.min(r.y1, d.y1), x2: Math.max(r.x2, d.x2), y2: Math.max(r.y2, d.y2) } : d;
+    }
+    // what a list or a window clips away is not drawn
+    if (r && node.clip) r = intersect(r, { x1: node.clip[0] - 4, y1: node.clip[1] - 4, x2: node.clip[2] + 4, y2: node.clip[3] + 4 });
+    drawnOf.set(node.path, r || null);
+    return r || null;
+  };
+  // what a later, solid piece lies over whole (a sheet, a cover, a detail card) is out of sight, so it can't crowd
+  const indexOf = new Map(scene.nodes.map((n, i) => [n.path, i]));
+  const screenArea = area(screen);
+  const catcher = (n, r) => n.press && r && area(r) >= LIMITS.catcher * screenArea;
+  const covers = scene.nodes
+    .map((n, i) => ({ n, i, r: visibleRect(n) }))
+    .filter(({ n, r }) => r && ((n.bgT !== undefined && n.bgT <= 0.05 && area(r) >= 2500) || catcher(n, r)));
+  const hidden = (node, r) => {
+    if (!r) return true;
+    const at = indexOf.get(node.path) ?? -1;
+    for (const c of covers) {
+      if (c.n.gui !== node.gui || c.i === at) continue;
+      // on top: drawn later at the same ZIndex or higher, or at a higher ZIndex wherever it sits
+      const cz = c.n.z ?? 1;
+      const nz = node.z ?? 1;
+      if (!(cz > nz || (c.i > at && cz >= nz))) continue;
+      if (node.path.startsWith(c.n.path + '/')) continue;
+      if (c.r.x1 <= r.x1 + 1 && c.r.y1 <= r.y1 + 1 && c.r.x2 >= r.x2 - 1 && c.r.y2 >= r.y2 - 1) return true;
+    }
+    return false;
+  };
+  // a touch Button's pressable is its invisible Hit pad: the button is the holder it grows
+  const seen = new Set();
+  const buttons = [];
+  for (const { node } of presses) {
+    // a Components/Button presses through its Face (or its Hit pad on touch): the button is the holder of both
+    const part = node.path.match(/\/(Hit|Face)$/);
+    const owner = part ? pathed.get(node.path.slice(0, -part[0].length)) || node : node;
+    if (!owner || seen.has(owner.path) || !drawnPress(owner)) continue;
+    seen.add(owner.path);
+    if (catcher(owner, visibleRect(owner)) || hidden(owner, drawnPress(owner))) continue;
+    buttons.push({ node: owner });
+  }
+  for (let i = 0; i < buttons.length; i++) {
+    for (let j = i + 1; j < buttons.length; j++) {
+      const a = buttons[i].node;
+      const b = buttons[j].node;
+      if (a.gui !== b.gui) continue;
+      if (b.path.startsWith(a.path + '/') || a.path.startsWith(b.path + '/')) continue;
+      const ra = drawnPress(a);
+      const rb = drawnPress(b);
+      const gapX = Math.max(rb.x1 - ra.x2, ra.x1 - rb.x2);
+      const gapY = Math.max(rb.y1 - ra.y2, ra.y1 - rb.y2);
+      const gap = Math.max(gapX, gapY);
+      if (gap >= LIMITS.near) continue;
+      // one inside the other's drawn box (a badge on a card, a full-screen catcher) is 'overlap's to report
+      const both = intersect(ra, rb);
+      if (both && area(both) > 0.9 * Math.min(area(ra), area(rb))) continue;
+      const what = gap < 0 ? `overlaps ${a.path}${label(a)} by ${px(-gap)} px` : `${px(gap)} px from ${a.path}${label(a)}, needs ${LIMITS.near}`;
+      add('crowd', b, `button ${what}`);
+    }
+  }
+  for (const { node: text } of shown) {
+    if (text.press || text.text === undefined || !/[\p{L}\p{N}]/u.test(text.text)) continue;
+    const rt = wordsRect(text);
+    if (rt.x2 - rt.x1 <= 0 || rt.y2 - rt.y1 <= 0 || hidden(text, rt)) continue;
+    for (const { node: button } of buttons) {
+      if (button.gui !== text.gui) continue;
+      if (text.path.startsWith(button.path + '/') || button.path.startsWith(text.path + '/')) continue;
+      const both = intersect(rt, drawnPress(button));
+      if (both && both.w > LIMITS.near && both.h > LIMITS.near) {
+        add('crowd', text, `text ${JSON.stringify(text.text.slice(0, 24))} under ${button.path}${label(button)}`);
+      }
+    }
+  }
+
+  // HUD tiles that run into each other: a tile inside another (a key cap's button) is part of it
+  const tiles = hudTiles(scene.nodes).filter(({ rect }) => rect && intersect(rect, screen));
+  for (let i = 0; i < tiles.length; i++) {
+    for (let j = i + 1; j < tiles.length; j++) {
+      const a = tiles[i];
+      const b = tiles[j];
+      if (b.node.path.startsWith(a.node.path + '/') || a.node.path.startsWith(b.node.path + '/')) continue;
+      const clear = Math.max(a.outline, b.outline);
+      const grown = { x1: a.rect.x1 - clear, y1: a.rect.y1 - clear, x2: a.rect.x2 + clear, y2: a.rect.y2 + clear };
+      const both = intersect(grown, b.rect);
+      if (both && both.w > 0.5 && both.h > 0.5) {
+        const gapX = Math.max(b.rect.x1 - a.rect.x2, a.rect.x1 - b.rect.x2);
+        const gapY = Math.max(b.rect.y1 - a.rect.y2, a.rect.y1 - b.rect.y2);
+        const gap = Math.max(gapX, gapY);
+        const what = gap < 0 ? `overlaps ${a.node.path} by ${px(-gap)} px` : `${px(gap)} px from ${a.node.path}, needs ${px(clear)}`;
+        const gated = GATED_TILES.test(a.node.path) && GATED_TILES.test(b.node.path);
+        add(gated ? 'tiles' : 'tilesnear', b.node, `HUD tile ${what}`);
+      }
+    }
+  }
+
+  // a view that hides Roblox's touch controls (GuiService.TouchControlsEnabled, the Edit lawn view) has none to check
+  if (profile.touch && scene.touchControls !== false) {
+    // Roblox's own touch controls: thumbstick bottom left; the jump button 70 px at (W-95, H-90) on a small screen
+    // (short side 500 or less), else 120 px at (W-170, H-210), as Components/NetButtonPlace.jump has it
+    const small = Math.min(W, H) <= 500;
+    const jump = small
+      ? { x1: W - 95, y1: H - 90, x2: W - 25, y2: H - 20 }
+      : { x1: W - 170, y1: H - 210, x2: W - 50, y2: H - 90 };
+    const zones = [
+      // on a bigger screen PlayerModule's thumbstick is 120 px with its top at H - 220 (TouchThumbstick:
+      // thumbstickSize * 1.75 + 10 up from the bottom), so a tablet's zone reaches higher than a phone's
+      { name: 'the thumbstick', r: small ? { x1: 0, y1: H - 180, x2: 200, y2: H } : { x1: 0, y1: H - 230, x2: 200, y2: H } },
+      { name: 'the jump button', r: jump },
+    ];
+    for (const { node, rect } of presses) {
+      for (const zone of zones) {
+        const hit = intersect(rect, zone.r);
+        if (hit && hit.w > 6 && hit.h > 6) add('thumbs', node, `under ${zone.name}${label(node)}`);
+      }
+    }
+  }
+
+  // a settled screen that keeps changing between the same few values shakes (rows that shake)
+  const boxes = new Map(scene.nodes.map((n) => [n.path, n]));
+  for (const j of scene.jitter || []) {
+    const owner = boxes.get(j.path) || boxes.get(j.path.split('/').slice(0, -1).join('/')) || null;
+    add('jitter', owner, `${j.prop} changed ${j.changes} times in 1 s between ${j.distinct} values`, `${j.path}.${j.prop}`);
+  }
+
+  for (const e of scene.errors) {
+    if (e.kind === 'error') add('error', null, e.text.split('\n').slice(0, 6).join(' | '));
+    else add('warning', null, e.text.split('\n')[0]);
+  }
+  return findings;
+}
+
+const keyOf = (f) => `${f.profile}|${f.scene}|${f.check}|${f.path || f.message.slice(0, 80)}`;
+
+// New findings are the ones over the baseline's count for their key; fixed are baseline keys with fewer now.
+// A run limited to one scene cannot tell which earlier window first showed a shared piece (the window frame, the
+// HUD behind it), so there a finding the baseline holds under any scene of the same size passes (review N275).
+export function compareBaseline(results, baseline, filtered = false) {
+  const counts = {};
+  const byKey = new Map();
+  for (const r of results) {
+    for (const f of r.findings) {
+      if (!f.gated) continue;
+      const key = keyOf(f);
+      counts[key] = (counts[key] || 0) + 1;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(f);
+    }
+  }
+  const accepted = baseline.findings || {};
+  const anyScene = new Map();
+  for (const [key, count] of Object.entries(accepted)) {
+    const [profile, , check, ...rest] = key.split('|');
+    const loose = `${profile}|${check}|${rest.join('|')}`;
+    anyScene.set(loose, (anyScene.get(loose) || 0) + count);
+  }
+  const fresh = [];
+  for (const [key, list] of byKey) {
+    let allowed = accepted[key] || 0;
+    if (filtered && allowed === 0) {
+      const [profile, , check, ...rest] = key.split('|');
+      allowed = anyScene.get(`${profile}|${check}|${rest.join('|')}`) || 0;
+    }
+    for (const f of list.slice(allowed)) {
+      f.fresh = true;
+      fresh.push(f);
+    }
+  }
+  const ran = new Set(results.map((r) => `${r.profile.name}|${r.scene}`));
+  const fixed = Object.keys(accepted).filter((key) => {
+    const [profile, scene] = key.split('|');
+    return ran.has(`${profile}|${scene}`) && (counts[key] || 0) < accepted[key];
+  });
+  const sorted = {};
+  for (const key of Object.keys(counts).sort()) sorted[key] = counts[key];
+  return { fresh, fixed, counts: sorted };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Report: index.html with every scene's picture, report.md with the findings
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const FONT_CSS = {
+  FredokaOne: "'Fredoka One', 'Fredoka', 'Arial Rounded MT Bold', sans-serif",
+  Nunito: "'Nunito', 'Segoe UI', sans-serif",
+};
+
+function sceneSvg(profile, result) {
+  const W = profile.width;
+  const H = profile.height;
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="sans-serif">`,
+    `<rect width="${W}" height="${H}" fill="#6d8a6a"/>`,
+    `<rect width="${LIMITS.topbarLeft}" height="${profile.inset}" fill="#000" fill-opacity="0.35"/>`,
+  ];
+  if (profile.touch && result.touchControls !== false) {
+    parts.push(`<circle cx="100" cy="${H - 90}" r="60" fill="#fff" fill-opacity="0.18"/>`);
+    parts.push(`<circle cx="${W - 60}" cy="${H - 55}" r="35" fill="#fff" fill-opacity="0.18"/>`);
+  }
+  const ordered = [...result.nodes].map((n, i) => ({ n, i })).sort((a, b) => a.n.order - b.n.order || a.i - b.i);
+  let clipId = 0;
+  for (const { n } of ordered) {
+    const r = visibleRect(n);
+    if (!r) continue;
+    const rw = r.x2 - r.x1;
+    const rh = r.y2 - r.y1;
+    const rx = n.r ? ` rx="${px(Math.min(n.r, rw / 2, rh / 2))}"` : '';
+    const at = `x="${px(r.x1)}" y="${px(r.y1)}" width="${px(rw)}" height="${px(rh)}"${rx}`;
+    if (n.bgT < 0.98) parts.push(`<rect ${at} fill="#${n.bg}" fill-opacity="${(1 - n.bgT).toFixed(2)}"/>`);
+    // pictures are not downloaded: a tinted box stands in (9-slice faces come out right, icons as a square)
+    if (n.image && n.imageT < 0.98) {
+      parts.push(
+        `<rect ${at} fill="#${n.ic || 'ffffff'}" fill-opacity="${(0.55 * (1 - n.imageT)).toFixed(2)}" stroke="#ffffff" stroke-opacity="0.3" stroke-dasharray="3 3"/>`,
+      );
+    }
+    if (n.bs) {
+      parts.push(`<rect ${at} fill="none" stroke="#${n.bs[0]}" stroke-width="${px(n.bs[1])}" stroke-opacity="${n.bs[2]}"/>`);
+    }
+    if (n.text !== undefined) {
+      const anchor = n.tx === 'Left' ? 'start' : n.tx === 'Right' ? 'end' : 'middle';
+      const tx = n.tx === 'Left' ? n.x : n.tx === 'Right' ? n.x + n.w : n.x + n.w / 2;
+      const clipped = n.clip !== undefined;
+      let open = '';
+      if (clipped) {
+        clipId += 1;
+        parts.push(`<clipPath id="c${clipId}"><rect x="${px(r.x1)}" y="${px(r.y1)}" width="${px(rw)}" height="${px(rh)}"/></clipPath>`);
+        open = ` clip-path="url(#c${clipId})"`;
+      }
+      const outline = n.ts2
+        ? ` stroke="#${n.ts2[0]}" stroke-width="${px(n.ts2[1] * 2)}" stroke-opacity="${n.ts2[2]}" paint-order="stroke" stroke-linejoin="round"`
+        : '';
+      // wrapped text: one line under the other, from the top, the middle or the bottom as the label aligns it
+      const rows = n.lines || [n.text];
+      const step = n.lines ? n.th / rows.length : n.th || n.ts;
+      const top =
+        n.ty === 'Center' || n.ty === undefined
+          ? n.y + n.h / 2 - (step * (rows.length - 1)) / 2
+          : n.ty === 'Top'
+            ? n.y + step / 2
+            : n.y + n.h - n.th + step / 2;
+      rows.forEach((row, i) => {
+        parts.push(
+          `<text x="${px(tx)}" y="${px(top + i * step)}" dominant-baseline="central" text-anchor="${anchor}" font-size="${px(n.ts)}" fill="#${n.tc}" fill-opacity="${n.ta ?? 1}"${outline} style="font-family:${FONT_CSS[n.font] || 'sans-serif'}"${open}>${esc(row)}</text>`,
+        );
+      });
+    }
+  }
+  for (const f of result.findings) {
+    if (!f.box) continue;
+    const colour = f.gated ? (f.fresh ? '#ff2d2d' : '#ff9a2d') : '#2db6ff';
+    const [x, y, w, h] = f.box;
+    parts.push(
+      `<rect x="${px(x)}" y="${px(y)}" width="${px(Math.max(w, 2))}" height="${px(Math.max(h, 2))}" fill="none" stroke="${colour}" stroke-width="2"><title>${esc(`${f.check}: ${f.path} ${f.message}`)}</title></rect>`,
+    );
+  }
+  parts.push('</svg>');
+  return parts.join('\n');
+}
+
+export function writeReport(outDir, { results, fresh, fixed, seconds }) {
+  const md = [
+    '# UI gate report',
+    '',
+    `${results.length} scenes in ${seconds.toFixed(1)} s. ${fresh.length} new finding(s) fail the gate; baseline findings are listed but pass.`,
+    '',
+  ];
+  if (fixed.length) {
+    md.push(`Gone since the baseline (shrink it with --update-baseline): ${fixed.length}`, '');
+    for (const key of fixed) md.push(`- ${key}`);
+    md.push('');
+  }
+  const html = [
+    '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<title>UI gate</title>',
+    '<style>body{font-family:system-ui,sans-serif;margin:16px;background:#fdf7ee;color:#3b2a20}h2{margin-top:32px}',
+    'img{max-width:100%;border:1px solid #c9b8a6}li.new{color:#c01616;font-weight:600}li.base{color:#9a5a00}li.warn{color:#26627e}',
+    '.key{font-size:13px}</style></head><body>',
+    '<h1>UI gate</h1>',
+    `<p>${results.length} scenes, ${fresh.length} new finding(s). Red: new, fails the gate. Orange: in the baseline. Blue: warning only. Hover a box for its finding.</p>`,
+  ];
+  for (const result of results) {
+    const file = `${result.profile.name}-${result.scene}.svg`;
+    fs.writeFileSync(path.join(outDir, file), sceneSvg(result.profile, result));
+    const title = `${result.scene} at ${result.profile.name} (${result.profile.width} x ${result.profile.height})`;
+    md.push(`## ${title}`, '');
+    html.push(`<h2>${esc(title)}</h2><img src="${file}" alt="${esc(title)}">`);
+    if (result.findings.length === 0) {
+      md.push('Nothing found.', '');
+      continue;
+    }
+    html.push('<ul class="key">');
+    for (const f of result.findings) {
+      const kind = !f.gated ? 'warn' : f.fresh ? 'new' : 'base';
+      const tag = kind === 'new' ? 'NEW' : kind === 'base' ? 'baseline' : 'warning';
+      md.push(`- **${f.check}** (${tag}) \`${f.path}\`: ${f.message}`);
+      html.push(`<li class="${kind}"><b>${esc(f.check)}</b> ${esc(f.path)}: ${esc(f.message)}</li>`);
+    }
+    md.push('');
+    html.push('</ul>');
+  }
+  html.push('</body></html>');
+  fs.writeFileSync(path.join(outDir, 'report.md'), md.join('\n') + '\n');
+  fs.writeFileSync(path.join(outDir, 'index.html'), html.join('\n') + '\n');
+  fs.writeFileSync(
+    path.join(outDir, 'findings.json'),
+    JSON.stringify(results.flatMap((r) => r.findings), null, 1) + '\n',
+  );
+}

@@ -1,0 +1,72 @@
+--!strict
+--[[
+	StudioRunner: finds every ModuleScript named *.spec under a folder (default: the Tests
+	folder this script lives in), requires each one and runs it with TestKit.
+
+	In Roblox Studio (after `rojo serve tests.project.json` so ReplicatedStorage.Tests exists),
+	run this from the command bar or through the Studio MCP execute_luau tool:
+
+		local run = require(game:GetService("ReplicatedStorage").Tests.StudioRunner)
+		local summary = run(nil, { verbose = true })
+		return string.format("%d passed, %d failed, %d skipped", summary.passed, summary.failed, summary.skipped)
+
+	In the cloud, tools/cloudcheck/run-tests.mjs builds a fake instance tree from the Rojo
+	project file and calls this same function, so both paths run identical code.
+]]
+
+local TestKit = require(script.Parent.TestKit)
+
+type SpecEntry = { name: string, body: (env: { [string]: any }) -> () }
+
+local function isSpec(instance: Instance): boolean
+	return instance:IsA("ModuleScript") and string.sub(instance.Name, -5) == ".spec"
+end
+
+-- `filter` keeps spec files whose name contains it, or only the one named exactly `filter` when `exact` is set.
+local function collect(root: Instance, filter: string?, exact: boolean?): { SpecEntry }
+	local specs: { SpecEntry } = {}
+	local found: { ModuleScript } = {}
+	for _, instance in ipairs(root:GetDescendants()) do
+		if isSpec(instance) then
+			table.insert(found, instance :: ModuleScript)
+		end
+	end
+	table.sort(found, function(a: ModuleScript, b: ModuleScript)
+		return a:GetFullName() < b:GetFullName()
+	end)
+
+	for _, moduleScript in ipairs(found) do
+		if filter ~= nil then
+			local matches = if exact
+				then moduleScript.Name == filter
+				else string.find(moduleScript.Name, filter, 1, true) ~= nil
+			if not matches then
+				continue
+			end
+		end
+		local ok, result = pcall(require, moduleScript :: any)
+		if ok and type(result) == "function" then
+			table.insert(specs, { name = moduleScript.Name, body = result :: any })
+		else
+			local message = if ok
+				then string.format("spec must return a function, got %s", typeof(result))
+				else tostring(result)
+			table.insert(specs, {
+				name = moduleScript.Name,
+				body = function(_env: { [string]: any }): ()
+					error("Could not load spec: " .. message, 0)
+				end,
+			})
+		end
+	end
+	return specs
+end
+
+type RunOptions = { verbose: boolean?, filter: string?, exact: boolean?, print: ((string) -> ())? }
+
+return function(root: Instance?, options: RunOptions?): TestKit.Summary
+	local opts: RunOptions = options or {}
+	local folder: Instance = root or (script.Parent :: Instance)
+	local specs = collect(folder, opts.filter, opts.exact)
+	return TestKit.runSpecs(specs, { verbose = opts.verbose, print = opts.print })
+end
